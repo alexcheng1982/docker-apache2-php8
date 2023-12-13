@@ -32,6 +32,6 @@ fs.writeFileSync(`./${version}/Dockerfile`, result);
 
 fs.readdirSync(version).forEach(file => {
   if (file.startsWith('docker-php-')) {
-    execSync(`git update-index --chmod=+x ${version}/${file}`);
+    execSync(`git add --chmod=+x ${version}/${file}`);
   }
 });
