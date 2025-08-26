@@ -1,4 +1,4 @@
-FROM ghcr.io/phusion/baseimage:jammy-1.0.1
+FROM ghcr.io/phusion/baseimage:jammy-1.0.4
 
 # prevent Debian's PHP packages from being installed
 # https://github.com/docker-library/php/pull/542
@@ -114,9 +114,9 @@ ENV PHP_LDFLAGS="-Wl,-O1 -pie"
 
 ENV GPG_KEYS 1198C0117593497A5EC5C199286AF1F9897469DC C28D937575603EB4ABB725861C0779DC5C0A9DE4 AFD8691FDAEDF03BDF6E460563F15A9B715376CA
 
-ENV PHP_VERSION 8.3.0
-ENV PHP_URL="https://www.php.net/distributions/php-8.3.0.tar.xz" PHP_ASC_URL="https://www.php.net/distributions/php-8.3.0.tar.xz.asc"
-ENV PHP_SHA256="1db84fec57125aa93638b51bb2b15103e12ac196e2f960f0d124275b2687ea54"
+ENV PHP_VERSION 8.3.24
+ENV PHP_URL="https://www.php.net/distributions/php-8.3.24.tar.xz" PHP_ASC_URL="https://www.php.net/distributions/php-8.3.24.tar.xz.asc"
+ENV PHP_SHA256="388ee5fd111097e97bae439bff46aec4ea27f816d3f0c2cb5490a41410d44251"
 
 RUN set -eux; \
 	\
@@ -134,16 +134,14 @@ RUN set -eux; \
 		echo "$PHP_SHA256 *php.tar.xz" | sha256sum -c -; \
 	fi; \
 	\
-	if [ -n "$PHP_ASC_URL" ]; then \
-		curl -fsSL -o php.tar.xz.asc "$PHP_ASC_URL"; \
-		export GNUPGHOME="$(mktemp -d)"; \
-		for key in $GPG_KEYS; do \
-			gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$key"; \
-		done; \
-		gpg --batch --verify php.tar.xz.asc php.tar.xz; \
-		gpgconf --kill all; \
-		rm -rf "$GNUPGHOME"; \
-	fi; \
+	curl -fsSL -o php.tar.xz.asc "$PHP_ASC_URL"; \
+	export GNUPGHOME="$(mktemp -d)"; \
+	for key in $GPG_KEYS; do \
+		gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$key"; \
+	done; \
+	gpg --batch --verify php.tar.xz.asc php.tar.xz; \
+	gpgconf --kill all; \
+	rm -rf "$GNUPGHOME"; \
 	\
 	apt-mark auto '.*' > /dev/null; \
 	apt-mark manual $savedAptMark > /dev/null; \
@@ -172,6 +170,9 @@ RUN set -eux; \
 		CFLAGS="$PHP_CFLAGS" \
 		CPPFLAGS="$PHP_CPPFLAGS" \
 		LDFLAGS="$PHP_LDFLAGS" \
+# https://github.com/php/php-src/blob/d6299206dd828382753453befd1b915491b741c6/configure.ac#L1496-L1511
+		PHP_BUILD_PROVIDER='https://github.com/docker-library/php' \
+		PHP_UNAME='Linux - Docker' \
 	; \
 	docker-php-source extract; \
 	cd /usr/src/php; \
@@ -195,8 +196,6 @@ RUN set -eux; \
 # https://github.com/docker-library/php/issues/822
 		--with-pic \
 		\
-# --enable-ftp is included here because ftp_ssl_connect() needs ftp to be compiled statically (see https://github.com/docker-library/php/issues/236)
-		--enable-ftp \
 # --enable-mbstring is included here because otherwise there's no way to get pecl to use it properly (see https://github.com/docker-library/php/issues/195)
 		--enable-mbstring \
 # --enable-mysqlnd is included here because it's harder to compile after the fact than extensions are (since it's a plugin for several extensions, not an extension in itself)
@@ -221,9 +220,6 @@ RUN set -eux; \
 # in PHP 7.4+, the pecl/pear installers are officially deprecated (requiring an explicit "--with-pear")
 		--with-pear \
 		\
-# bundled pcre does not support JIT on s390x
-# https://manpages.debian.org/bullseye/libpcre3-dev/pcrejit.3.en.html#AVAILABILITY_OF_JIT_SUPPORT
-		$(test "$gnuArch" = 's390x-linux-gnu' && echo '--without-pcre-jit') \
 		--with-libdir="lib/$debMultiarch" \
 		\
 		--disable-cgi \
@@ -253,10 +249,11 @@ RUN set -eux; \
 	apt-mark auto '.*' > /dev/null; \
 	[ -z "$savedAptMark" ] || apt-mark manual $savedAptMark; \
 	find /usr/local -type f -executable -exec ldd '{}' ';' \
-		| awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) { next }; gsub("^/(usr/)?", "", so); print so }' \
+		| awk '/=>/ { so = $(NF-1); if (index(so, "/usr/local/") == 1) { next }; gsub("^/(usr/)?", "", so); printf "*%s\n", so }' \
 		| sort -u \
-		| xargs -r dpkg-query --search \
-		| cut -d: -f1 \
+		| xargs -rt dpkg-query --search \
+# https://manpages.debian.org/trixie/dpkg/dpkg-query.1.en.html#S (we ignore diversions and it'll be really unusual for more than one package to provide any given .so file)
+		| awk 'sub(":$", "", $1) { print $1 }' \
 		| sort -u \
 		| xargs -r apt-mark manual \
 	; \
@@ -271,6 +268,9 @@ RUN set -eux; \
 	php --version
 
 COPY docker-php-ext-* docker-php-entrypoint /usr/local/bin/
+
+# enable OPcache by default (https://wiki.php.net/rfc/make_opcache_required)
+RUN docker-php-ext-enable opcache
 
 # sodium was built as a shared module (so that it can be replaced later if so desired), so let's enable it too (https://github.com/docker-library/php/issues/598)
 RUN docker-php-ext-enable sodium
